@@ -3,7 +3,9 @@ import base64,datetime,fnmatch,hashlib,json,os,pathlib,re,subprocess,tempfile,ti
 
 VERSION='44.164.10'
 INTEGRITY='00SwO80VhvAKMvn3NHD3yQTq9Fo0NhhpGgRkmRlh+6GS/GgH7AHwNsAnueU3gjTtoPAyj8igBQZvVqfmcG3mew=='
-SERVER='http://192.168.1.130:3000'
+SERVER=os.environ['PERSONAL_GITEA_SERVER']
+assert SERVER==os.environ['GITHUB_SERVER_URL']
+assert urllib.parse.urlsplit(SERVER).scheme=='http'and urllib.parse.urlsplit(SERVER).port==3000
 REPOSITORY='hallyaus/australian-fire-watch'
 BRANCH='main'
 PREFIX='renovate/personal-'
@@ -112,7 +114,7 @@ def main():
             sha=candidate['source'];assert re.fullmatch('[0-9a-f]{40}',sha)
             file=api(base+'/contents/.gitea/workflows/ci.yml?ref='+sha)
             content=base64.b64decode(file['content']).decode()
-            if 'PERSONAL_DEPENDENCY_STATUS_V1'not in content:
+            if 'PERSONAL_DEPENDENCY_STATUS_V2'not in content:
                 # Bring the controlled validator into our earlier review branches by
                 # a normal merge. Preserve both histories; never rebase or force-push.
                 number=str(candidate['number'])
@@ -141,7 +143,7 @@ def main():
                 sha=merged_sha;candidate['source']=sha
                 file=api(base+'/contents/.gitea/workflows/ci.yml?ref='+sha)
                 content=base64.b64decode(file['content']).decode()
-                assert 'PERSONAL_DEPENDENCY_STATUS_V1'in content
+                assert 'PERSONAL_DEPENDENCY_STATUS_V2'in content
             statuses=api(base+'/statuses/'+sha+'?limit=100')
             matching=[s for s in statuses if s['context']==STATUS_CONTEXT]
             latest=max(matching,key=lambda s:s['id'])if matching else None

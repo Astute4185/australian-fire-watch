@@ -30,7 +30,8 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        test "$GITHUB_SERVER_URL" = 'http://192.168.1.130:3000'
+        test -n "${PERSONAL_GITEA_SERVER:?Repository primary URL variable required}"
+        test "$GITHUB_SERVER_URL" = "$PERSONAL_GITEA_SERVER"
         test "$GITHUB_REPOSITORY" = "$EXPECTED_REPOSITORY"
         test "$GITHUB_REF" = 'refs/heads/main'
         test -n "${SOURCE_TOKEN:?Gitea job token is required}"
@@ -60,3 +61,5 @@ jobs:
       env:
         DEPENDENCY_JOB_TOKEN: ${{ secrets.GITEA_TOKEN }}
       run: python3 .gitea/scripts/dependency-updates.py
+env:
+  PERSONAL_GITEA_SERVER: ${{ vars.PERSONAL_GITEA_SERVER }}

@@ -279,9 +279,9 @@ jobs:
       run: |
         set -euo pipefail
         python3 - <<'PY'
-        # PERSONAL_DEPENDENCY_STATUS_V1
+        # PERSONAL_DEPENDENCY_STATUS_V2
         import json,os,re,urllib.request
-        server='http://192.168.1.130:3000';repo='hallyaus/australian-fire-watch'
+        server=os.environ['PERSONAL_GITEA_SERVER'];repo='hallyaus/australian-fire-watch'
         assert os.environ['GITHUB_SERVER_URL']==server and os.environ['GITHUB_REPOSITORY']==repo
         source=os.environ['GITHUB_SHA'];assert re.fullmatch('[0-9a-f]{40}',source)
         assert os.environ['GITHUB_EVENT_NAME']in('workflow_dispatch','pull_request')
