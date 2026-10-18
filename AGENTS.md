@@ -1,5 +1,22 @@
 # Australian Fire Watch contributor guide
 
+## Personal source and build route
+
+Private VM300 hallyaus/australian-fire-watch is the primary source, Git SSH
+port 2222. GitHub remains the public HACS download catalogue and identical
+recovery copy with Actions disabled. Push completed source to VM300 first;
+recovery pushes must not build or publish. Dedicated personal-ubuntu jobs
+preserve Python units, actual HA runtime regressions, official hassfest,
+JavaScript checks and deterministic private candidate packaging. An archive
+is not a release: require exact-source official HACS validation before any
+separately authorised publication. Never expose private primary source or
+reuse M4T credentials. Existing shipped versions/assets stay immutable.
+
+The official feed checker is manual-only until its first personal runner
+execution passes. Then restore the existing weekly `17 3 * * 6` schedule;
+perform read-only official-feed requests only, with no HA notifications or
+household data. Do not classify an upstream contract failure as safe.
+
 This repository is a HACS-installable Home Assistant integration for Australian
 bushfire awareness. It is supplementary to official emergency channels and must
 never describe missing or stale data as safe.

@@ -1,0 +1,48 @@
+name: Official Fire Watch feed contract check
+'on':
+  workflow_dispatch: null
+permissions:
+  contents: read
+jobs:
+  feeds:
+    runs-on: personal-ubuntu
+    container:
+      image: python:3.13-bookworm@sha256:073ffebb96ae4d0ed73ccad59f08c47bd84af8a79f5258130f8458ac50ad9ff4
+    timeout-minutes: 15
+    steps:
+    - name: Check out the exact private VM300 source
+      env:
+        SOURCE_TOKEN: ${{ secrets.GITEA_TOKEN }}
+      shell: sh
+      run: |
+        set -eu
+        test "$GITHUB_SERVER_URL" = 'http://192.168.1.130:3000'
+        test "$GITHUB_REPOSITORY" = 'hallyaus/australian-fire-watch'
+        test "$GITHUB_REF" = 'refs/heads/main'
+        test -n "${SOURCE_TOKEN:?Repository job token required}"
+        case "$GITHUB_SHA" in ''|*[!0-9a-f]*) exit 1;; esac
+        test "${#GITHUB_SHA}" -eq 40
+        command -v git >/dev/null || apk add --no-cache git
+        helper="$(mktemp "${RUNNER_TEMP:-/tmp}/firewatch-askpass.XXXXXX")"
+        trap 'rm -f "$helper"' EXIT
+        cat > "$helper" <<'ASKPASS'
+        #!/bin/sh
+        case "$1" in
+          *Username*) printf '%s\n' 'x-access-token' ;;
+          *Password*) printf '%s\n' "$SOURCE_TOKEN" ;;
+          *) exit 1 ;;
+        esac
+        ASKPASS
+        chmod 700 "$helper"
+        export GIT_ASKPASS="$helper" GIT_TERMINAL_PROMPT=0
+        git init .
+        git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+        git -c credential.helper= fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+        git checkout --detach FETCH_HEAD
+        test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+    - name: One bounded read-only publisher contract check
+      shell: sh
+      run: |
+        set -eu
+        python -m pip install --disable-pip-version-check aiohttp
+        python scripts/check_live_feeds.py
