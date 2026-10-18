@@ -3,6 +3,8 @@ name: Official Fire Watch feed contract check
   workflow_dispatch: null
 permissions:
   contents: read
+env:
+  PERSONAL_GITEA_SERVER: ${{ vars.PERSONAL_GITEA_SERVER }}
 jobs:
   feeds:
     runs-on: personal-ubuntu
@@ -16,7 +18,8 @@ jobs:
       shell: sh
       run: |
         set -eu
-        test "$GITHUB_SERVER_URL" = 'http://192.168.1.130:3000'
+        test -n "${PERSONAL_GITEA_SERVER:?Repository primary URL variable required}"
+        test "$GITHUB_SERVER_URL" = "$PERSONAL_GITEA_SERVER"
         test "$GITHUB_REPOSITORY" = 'hallyaus/australian-fire-watch'
         test "$GITHUB_REF" = 'refs/heads/main'
         test -n "${SOURCE_TOKEN:?Repository job token required}"

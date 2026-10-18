@@ -36,3 +36,15 @@ It starts manual-only. After its first successful run, restore the existing
 weekly Saturday03:17UTC schedule. A failed feed contract remains visible and
 must not generate a healthy/green status. No live HA restart or installation
 is part of migration; those require the existing configuration check first.
+
+The first runner unit job451 passed91of92checks; the existing private-state
+packaging guard correctly rejected the new literal LAN source address in CI
+metadata. That guard is unchanged. The expected primary URL now lives only in
+the repository-level non-secret `PERSONAL_GITEA_SERVER` Actions variable, using
+the supported Gitea `vars` context. Every checkout still refuses an absent or
+different expected server, repository, branch or source SHA. Private candidate
+provenance records the checked runtime URL rather than embedding it in public
+source. No feed, notification, entity, product version or published asset changed.
+The corrected full runner route remains unverified until all gates complete.
+
+Variable support: https://docs.gitea.com/usage/actions/actions-variables/

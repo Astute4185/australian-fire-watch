@@ -103,7 +103,10 @@ def main():
     out.mkdir(exist_ok=True)
     archive = out / 'australian_fire_watch.zip'
     package(files, archive)
-    receipt = {'repository': 'hallyaus/australian-fire-watch', 'source_server': 'http://192.168.1.130:3000',
+    source_server = os.getenv('GITHUB_SERVER_URL')
+    if not os.getenv('PERSONAL_GITEA_SERVER') or source_server != os.getenv('PERSONAL_GITEA_SERVER'):
+        raise SystemExit('Repository primary URL identity must match the workflow server')
+    receipt = {'repository': 'hallyaus/australian-fire-watch', 'source_server': source_server,
                'source_sha': sha, 'source_tree': git('rev-parse', 'HEAD^{tree}').decode().strip(),
                'version': version, 'archive': archive.name, 'archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
                'members': len(files), 'run_id': os.getenv('GITHUB_RUN_ID'), 'published': False,
