@@ -1,6 +1,8 @@
 name: Official Fire Watch feed contract check
 'on':
   workflow_dispatch: null
+  schedule:
+    - cron: '17 3 * * 6'
 permissions:
   contents: read
 env:

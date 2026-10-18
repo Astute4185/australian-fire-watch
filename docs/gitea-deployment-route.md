@@ -48,3 +48,18 @@ source. No feed, notification, entity, product version or published asset change
 The corrected full runner route remains unverified until all gates complete.
 
 Variable support: https://docs.gitea.com/usage/actions/actions-variables/
+# Verified weekly validation follow-up
+
+Private exact-source463 passed the original92unit cases, three package
+regressions,30real Home Assistant cases, official hassfest and static gates.
+Its private ZIP's25members matched exact source; identical public recovery
+was inert. No public release, tag, HA installation or notification was made.
+
+Manual501 then passed all16official publisher feed contracts with one bounded
+read-only GET per contract, including valid empty feeds. The original weekly
+Saturday03:17UTC cadence is now enrolled for both the unchanged complete
+private-source CI and this separate bounded feed job. Registration and the
+configuration commit's full CI must still pass; first scheduled firing is not
+claimed. Official public HACS validation remains a separate credential/scope
+hold, not a private-CI pass. Security alerts and source visibility are preserved.
+

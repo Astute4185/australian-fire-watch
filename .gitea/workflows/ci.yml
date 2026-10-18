@@ -4,6 +4,8 @@ name: Fire Watch private-source validation and candidate
     branches:
     - main
   workflow_dispatch: null
+  schedule:
+    - cron: '17 3 * * 6'
 permissions:
   contents: read
 env:
