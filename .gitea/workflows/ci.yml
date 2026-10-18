@@ -1,13 +1,13 @@
 name: Fire Watch private-source validation and candidate
-'on':
-  push:
-    branches:
-    - main
-  workflow_dispatch: null
-  schedule:
-    - cron: '17 3 * * 6'
 permissions:
-  contents: read
+  code: read
+  pull-requests: read
+  issues: none
+  actions: none
+  releases: none
+  packages: none
+  wiki: none
+  projects: none
 env:
   PERSONAL_GITEA_SERVER: ${{ vars.PERSONAL_GITEA_SERVER }}
 jobs:
@@ -26,7 +26,16 @@ jobs:
         test -n "${PERSONAL_GITEA_SERVER:?Repository primary URL variable required}"
         test "$GITHUB_SERVER_URL" = "$PERSONAL_GITEA_SERVER"
         test "$GITHUB_REPOSITORY" = 'hallyaus/australian-fire-watch'
-        test "$GITHUB_REF" = 'refs/heads/main'
+        case "$GITHUB_EVENT_NAME:$GITHUB_REF" in
+          pull_request:refs/pull/*/head)
+            test "$GITHUB_BASE_REF" = main
+            pr_number="${GITHUB_REF#refs/pull/}"; pr_number="${pr_number%/head}"
+            case "$pr_number" in ''|*[!0-9]*) exit 1 ;; esac
+            test "$pr_number" -gt 0 ;;
+          push:refs/heads/main|schedule:refs/heads/main|workflow_dispatch:refs/heads/main) ;;
+          workflow_dispatch:refs/heads/renovate/personal-*) ;;
+          *) exit 1 ;;
+        esac
         test -n "${SOURCE_TOKEN:?Repository job token required}"
         case "$GITHUB_SHA" in ''|*[!0-9a-f]*) exit 1;; esac
         test "${#GITHUB_SHA}" -eq 40
@@ -74,7 +83,16 @@ jobs:
         test -n "${PERSONAL_GITEA_SERVER:?Repository primary URL variable required}"
         test "$GITHUB_SERVER_URL" = "$PERSONAL_GITEA_SERVER"
         test "$GITHUB_REPOSITORY" = 'hallyaus/australian-fire-watch'
-        test "$GITHUB_REF" = 'refs/heads/main'
+        case "$GITHUB_EVENT_NAME:$GITHUB_REF" in
+          pull_request:refs/pull/*/head)
+            test "$GITHUB_BASE_REF" = main
+            pr_number="${GITHUB_REF#refs/pull/}"; pr_number="${pr_number%/head}"
+            case "$pr_number" in ''|*[!0-9]*) exit 1 ;; esac
+            test "$pr_number" -gt 0 ;;
+          push:refs/heads/main|schedule:refs/heads/main|workflow_dispatch:refs/heads/main) ;;
+          workflow_dispatch:refs/heads/renovate/personal-*) ;;
+          *) exit 1 ;;
+        esac
         test -n "${SOURCE_TOKEN:?Repository job token required}"
         case "$GITHUB_SHA" in ''|*[!0-9a-f]*) exit 1;; esac
         test "${#GITHUB_SHA}" -eq 40
@@ -119,7 +137,16 @@ jobs:
         test -n "${PERSONAL_GITEA_SERVER:?Repository primary URL variable required}"
         test "$GITHUB_SERVER_URL" = "$PERSONAL_GITEA_SERVER"
         test "$GITHUB_REPOSITORY" = 'hallyaus/australian-fire-watch'
-        test "$GITHUB_REF" = 'refs/heads/main'
+        case "$GITHUB_EVENT_NAME:$GITHUB_REF" in
+          pull_request:refs/pull/*/head)
+            test "$GITHUB_BASE_REF" = main
+            pr_number="${GITHUB_REF#refs/pull/}"; pr_number="${pr_number%/head}"
+            case "$pr_number" in ''|*[!0-9]*) exit 1 ;; esac
+            test "$pr_number" -gt 0 ;;
+          push:refs/heads/main|schedule:refs/heads/main|workflow_dispatch:refs/heads/main) ;;
+          workflow_dispatch:refs/heads/renovate/personal-*) ;;
+          *) exit 1 ;;
+        esac
         test -n "${SOURCE_TOKEN:?Repository job token required}"
         case "$GITHUB_SHA" in ''|*[!0-9a-f]*) exit 1;; esac
         test "${#GITHUB_SHA}" -eq 40
@@ -168,7 +195,16 @@ jobs:
         test -n "${PERSONAL_GITEA_SERVER:?Repository primary URL variable required}"
         test "$GITHUB_SERVER_URL" = "$PERSONAL_GITEA_SERVER"
         test "$GITHUB_REPOSITORY" = 'hallyaus/australian-fire-watch'
-        test "$GITHUB_REF" = 'refs/heads/main'
+        case "$GITHUB_EVENT_NAME:$GITHUB_REF" in
+          pull_request:refs/pull/*/head)
+            test "$GITHUB_BASE_REF" = main
+            pr_number="${GITHUB_REF#refs/pull/}"; pr_number="${pr_number%/head}"
+            case "$pr_number" in ''|*[!0-9]*) exit 1 ;; esac
+            test "$pr_number" -gt 0 ;;
+          push:refs/heads/main|schedule:refs/heads/main|workflow_dispatch:refs/heads/main) ;;
+          workflow_dispatch:refs/heads/renovate/personal-*) ;;
+          *) exit 1 ;;
+        esac
         test -n "${SOURCE_TOKEN:?Repository job token required}"
         case "$GITHUB_SHA" in ''|*[!0-9a-f]*) exit 1;; esac
         test "${#GITHUB_SHA}" -eq 40
@@ -211,3 +247,74 @@ jobs:
         path: dist/
         if-no-files-found: error
         retention-days: 14
+  dependency_status:
+    if: ${{ always() && ((github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/renovate/personal-'))
+      || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'renovate/personal-') &&
+      github.event.pull_request.head.repo.full_name == github.repository)) }}
+    needs:
+    - unit
+    - runtime
+    - hassfest
+    - candidate
+    runs-on: personal-ubuntu
+    timeout-minutes: 5
+    permissions:
+      code: write
+      pull-requests: read
+      issues: none
+      actions: none
+      releases: none
+      packages: none
+      wiki: none
+      projects: none
+    steps:
+    - name: Report only the exact dependency proposal validation result
+      env:
+        STATUS_JOB_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        GATE_UNIT: ${{ needs.unit.result }}
+        GATE_RUNTIME: ${{ needs.runtime.result }}
+        GATE_HASSFEST: ${{ needs.hassfest.result }}
+        GATE_CANDIDATE: ${{ needs.candidate.result }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 - <<'PY'
+        # PERSONAL_DEPENDENCY_STATUS_V1
+        import json,os,re,urllib.request
+        server='http://192.168.1.130:3000';repo='hallyaus/australian-fire-watch'
+        assert os.environ['GITHUB_SERVER_URL']==server and os.environ['GITHUB_REPOSITORY']==repo
+        source=os.environ['GITHUB_SHA'];assert re.fullmatch('[0-9a-f]{40}',source)
+        assert os.environ['GITHUB_EVENT_NAME']in('workflow_dispatch','pull_request')
+        ref=os.environ['GITHUB_REF'];assert ref.startswith('refs/heads/renovate/personal-')or(ref.startswith('refs/pull/')and ref.endswith('/head'))
+        results=[os.environ['GATE_'+name.upper()]for name in ['unit','runtime','hassfest','candidate']]
+        assert all(x in('success','failure','cancelled','skipped')for x in results)
+        state='success'if results==['success']*4else('error'if'cancelled'in results else'failure')
+        token=os.environ.pop('STATUS_JOB_TOKEN');assert token
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+         def redirect_request(self,*args,**kwargs):raise RuntimeError('Unexpected authenticated redirect')
+        opener=urllib.request.build_opener(NoRedirect)
+        def api(path,body=None):
+         request=urllib.request.Request(server+'/api/v1/repos/'+repo+path,method='GET'if body is None else'POST',data=None if body is None else json.dumps(body).encode(),headers={'Authorization':'token '+token,'Content-Type':'application/json'})
+         with opener.open(request,timeout=30)as response:
+          raw=response.read(2097153);assert len(raw)<=2097152
+          return json.loads(raw)if raw else None
+        metadata=api('');assert metadata['private']and metadata['owner']['login']=='hallyaus'
+        branch=api('/branches/main');assert branch['protected']and not branch['user_can_push']and not branch['user_can_merge']
+        pulls=api('/pulls?state=open&limit=100');matches=[p for p in pulls if p['head']['sha']==source and p['head']['ref'].startswith('renovate/personal-')and p['base']['ref']=='main'and p['head']['repo']['id']==metadata['id']]
+        assert len(matches)<=1
+        if matches:
+         status=api('/statuses/'+source,{'state':state,'context':'personal-dependency-checks','description':'Exact-source unit, real HA, hassfest and package gates: '+state,'target_url':matches[0]['html_url']})
+         assert status['status']==state and status['context']=='personal-dependency-checks'
+        print(json.dumps({'personal_dependency_validation_status':{'source':source,'state':state,'test_results':results,'matching_open_proposals':len(matches),'published':bool(matches),'default_push_and_merge_denied':True,'credential_values_recorded':False}}))
+        token=None
+        PY
+'on':
+  push:
+    branches:
+    - main
+  workflow_dispatch: null
+  schedule:
+  - cron: 17 3 * * 6
+  pull_request:
+    branches:
+    - main

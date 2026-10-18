@@ -1,0 +1,62 @@
+name: Personal dependency updates for owner review
+'on':
+  workflow_dispatch: null
+  push:
+    branches:
+    - main
+    paths:
+    - .gitea/workflows/dependency-updates.yml
+    - .gitea/scripts/dependency-updates.py
+  schedule:
+  - cron: 17 3 * * 6
+permissions:
+  code: write
+  pull-requests: write
+  releases: none
+  issues: read
+  actions: write
+  packages: none
+  wiki: none
+  projects: none
+jobs:
+  update:
+    runs-on: personal-ubuntu
+    timeout-minutes: 25
+    steps:
+    - name: Check out the exact private Gitea commit
+      env:
+        SOURCE_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        EXPECTED_REPOSITORY: hallyaus/australian-fire-watch
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$GITHUB_SERVER_URL" = 'http://192.168.1.130:3000'
+        test "$GITHUB_REPOSITORY" = "$EXPECTED_REPOSITORY"
+        test "$GITHUB_REF" = 'refs/heads/main'
+        test -n "${SOURCE_TOKEN:?Gitea job token is required}"
+        [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+        credential_helper_path="$(mktemp "${RUNNER_TEMP:-/tmp}/personal-git-askpass.XXXXXX")"
+        trap 'rm -f "$credential_helper_path"' EXIT
+        cat > "$credential_helper_path" <<'ASKPASS'
+        #!/bin/sh
+        case "$1" in
+          *Username*) printf '%s\n' 'x-access-token' ;;
+          *Password*) printf '%s\n' "$SOURCE_TOKEN" ;;
+          *) exit 1 ;;
+        esac
+        ASKPASS
+        chmod 700 "$credential_helper_path"
+        export GIT_ASKPASS="$credential_helper_path" GIT_TERMINAL_PROMPT=0
+        git init .
+        if git remote get-url origin >/dev/null 2>&1; then
+          test "$(git remote get-url origin)" = "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+        else
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+        fi
+        git -c credential.helper= fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+        git checkout --detach FETCH_HEAD
+        test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+    - name: Create bounded dependency review PRs without default-branch writes
+      env:
+        DEPENDENCY_JOB_TOKEN: ${{ secrets.GITEA_TOKEN }}
+      run: python3 .gitea/scripts/dependency-updates.py

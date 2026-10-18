@@ -51,3 +51,18 @@ existing published release assets or move an existing tag.
 ## Validation
 
 Run `python -m unittest discover -s tests -v`, compile Python, validate JSON/YAML, and run `ruff`/`mypy` when available. Production installation requires a Home Assistant configuration check before restart.
+
+## Personal dependency review automation
+
+The private VM300 dependency-updates workflow uses its short-lived, repository-only
+Actions token to propose review PRs on renovate/personal-* branches. Only hallyaus
+may push or merge main. Automatic merging, branch rebasing, install scripts, plugins
+and post-upgrade commands are disabled. Existing application files and installed
+versions are not changed by enrolling this route. Original validation gates run
+against each exact proposal; an isolated job reports personal-dependency-checks.
+The updater explicitly queues these checks because this Gitea version suppresses
+bot-created PR events. Child runs must not be awaited inside the updater at shared
+capacity one. Preserve existing proposals and inspect conflicts rather than
+force-pushing. Retire the old GitHub updater only after this replacement is proved.
+Private validation/package results do not authorize a public release, integration
+installation, physical device/account action or a production application change.
