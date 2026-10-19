@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
 
 from custom_components.australian_fire_watch.binary_sensor import (
     FireWatchActiveWarningBinarySensor,
@@ -28,13 +29,13 @@ def entity_id(hass, entry, domain, key):
 
 
 def test_quiet_hours_use_home_assistant_local_time_and_cross_midnight():
+    zone = dt_util.get_time_zone("Australia/Sydney")
+    assert zone is not None
     evening = datetime(2026, 9, 13, 13, 30, tzinfo=timezone.utc)  # 23:30 Sydney
-    result = _quiet_hours_end(evening, "Australia/Sydney", "22:00:00", "07:00:00")
+    result = _quiet_hours_end(evening, zone, "22:00:00", "07:00:00")
     assert result == datetime(2026, 9, 13, 21, 0, tzinfo=timezone.utc)
     midday = datetime(2026, 9, 13, 2, 0, tzinfo=timezone.utc)  # 12:00 Sydney
-    assert _quiet_hours_end(
-        midday, "Australia/Sydney", "22:00:00", "07:00:00"
-    ) is None
+    assert _quiet_hours_end(midday, zone, "22:00:00", "07:00:00") is None
 
 
 async def test_setup_reload_unload_and_services(hass, entry, loaded):

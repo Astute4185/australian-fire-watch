@@ -146,6 +146,24 @@ class PackagingTests(unittest.TestCase):
         setup = (COMPONENT / "__init__.py").read_text(encoding="utf-8")
         self.assertIn("async def async_migrate_entry", setup)
 
+    def test_timezone_loading_is_not_repeated_on_runtime_paths(self) -> None:
+        constants = (COMPONENT / "const.py").read_text(encoding="utf-8")
+        self.assertIn('SYDNEY_TZ = ZoneInfo("Australia/Sydney")', constants)
+        for filename in ("parsers.py", "coordinator.py"):
+            source = (COMPONENT / filename).read_text(encoding="utf-8")
+            with self.subTest(filename=filename):
+                self.assertNotIn("ZoneInfo(", source)
+        coordinator = (COMPONENT / "coordinator.py").read_text(encoding="utf-8")
+        self.assertIn("dt_util.get_time_zone(self.hass.config.time_zone)", coordinator)
+
+    def test_panel_file_check_runs_in_home_assistant_executor(self) -> None:
+        setup = (COMPONENT / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "await hass.async_add_executor_job(panel_file.is_file)",
+            setup,
+        )
+        self.assertNotIn("if not panel_file.is_file():", setup)
+
     def test_local_brand_icon(self) -> None:
         icon = COMPONENT / "brand" / "icon.png"
         data = icon.read_bytes()

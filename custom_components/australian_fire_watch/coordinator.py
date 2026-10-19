@@ -7,10 +7,9 @@ import logging
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from functools import partial
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -18,6 +17,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
 from .api import FeedSnapshot, OfficialFeedClient
 from .cameras import (
@@ -73,6 +73,7 @@ from .const import (
     OFFICIAL_INCIDENTS_URL,
     SUMMARY_INCIDENT_LIMIT,
     SUMMARY_PLANNED_LIMIT,
+    SYDNEY_TZ,
     jurisdiction_codes,
 )
 from .jurisdictions import Jurisdiction, jurisdiction_for
@@ -570,13 +571,12 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         rfs = (rfs_districts or {}).get(district, {})
         snapshot = snapshots["rfs_fdr_toban"]
         published = snapshot.last_modified or snapshot.changed_at
-        sydney = ZoneInfo("Australia/Sydney")
-        local_today = datetime.now(sydney).date()
+        local_today = datetime.now(SYDNEY_TZ).date()
         source_date = _as_datetime(rfs.get("source_date"))
         anchor = (
             source_date.date()
             if source_date
-            else (published.astimezone(sydney).date() if published else None)
+            else (published.astimezone(SYDNEY_TZ).date() if published else None)
         )
         declarations = (
             {
@@ -1406,9 +1406,13 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             or lifecycle not in {"updated", "deescalated", "resolved", "left_radius"}
         ):
             return None
+        zone = (
+            dt_util.get_time_zone(self.hass.config.time_zone)
+            or dt_util.get_default_time_zone()
+        )
         return _quiet_hours_end(
             now,
-            str(self.hass.config.time_zone),
+            zone,
             self.config.get(CONF_QUIET_START, DEFAULT_QUIET_START),
             self.config.get(CONF_QUIET_END, DEFAULT_QUIET_END),
         )
@@ -1679,17 +1683,13 @@ def _clock_time(value: Any):
 
 
 def _quiet_hours_end(
-    now: datetime, time_zone: str, start_value: Any, end_value: Any
+    now: datetime, zone: tzinfo, start_value: Any, end_value: Any
 ) -> datetime | None:
     """Return the next quiet-hours end in UTC, or None when outside the window."""
     start = _clock_time(start_value)
     end = _clock_time(end_value)
     if start is None or end is None or start == end:
         return None
-    try:
-        zone = ZoneInfo(time_zone)
-    except (KeyError, ValueError):
-        zone = timezone.utc
     local_now = now.astimezone(zone)
     clock = local_now.time().replace(tzinfo=None)
     if start < end:

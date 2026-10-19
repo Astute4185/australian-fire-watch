@@ -11,9 +11,8 @@ import re
 from typing import Any, Iterable
 from urllib.parse import urlparse
 from xml.etree import ElementTree as ET
-from zoneinfo import ZoneInfo
 
-from .const import OFFICIAL_INCIDENTS_URL
+from .const import OFFICIAL_INCIDENTS_URL, SYDNEY_TZ
 from .model import Incident, ParsedFeed, normalize_danger, normalize_warning
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -78,9 +77,7 @@ def _parse_datetime(
             result = datetime.fromisoformat(candidate)
             if result.tzinfo is None:
                 result = result.replace(
-                    tzinfo=ZoneInfo("Australia/Sydney")
-                    if assume_nsw_local
-                    else timezone.utc
+                    tzinfo=SYDNEY_TZ if assume_nsw_local else timezone.utc
                 )
             return result.astimezone(timezone.utc)
         except ValueError:
@@ -89,9 +86,7 @@ def _parse_datetime(
         result = parsedate_to_datetime(text)
         if result.tzinfo is None:
             result = result.replace(
-                tzinfo=ZoneInfo("Australia/Sydney")
-                if assume_nsw_local
-                else timezone.utc
+                tzinfo=SYDNEY_TZ if assume_nsw_local else timezone.utc
             )
         return result.astimezone(timezone.utc)
     except (TypeError, ValueError, OverflowError):
@@ -100,9 +95,7 @@ def _parse_datetime(
         try:
             result = datetime.strptime(text, fmt)
             return result.replace(
-                tzinfo=ZoneInfo("Australia/Sydney")
-                if assume_nsw_local
-                else timezone.utc
+                tzinfo=SYDNEY_TZ if assume_nsw_local else timezone.utc
             ).astimezone(timezone.utc)
         except ValueError:
             continue
@@ -602,7 +595,7 @@ def parse_rfs_fire_danger(payload: bytes | str) -> dict[str, dict[str, Any]]:
         ):
             raise FeedParseError("Incomplete fire-danger district record")
         districts[name] = {
-            "source_date": source_date.astimezone(ZoneInfo("Australia/Sydney"))
+            "source_date": source_date.astimezone(SYDNEY_TZ)
             .date()
             .isoformat()
             if source_date
