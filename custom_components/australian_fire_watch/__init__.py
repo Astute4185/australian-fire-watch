@@ -326,7 +326,7 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
             return
         frontend_dir = Path(__file__).parent / "frontend"
         panel_file = frontend_dir / PANEL_JS_FILE
-        if not panel_file.is_file():
+        if not await hass.async_add_executor_job(panel_file.is_file):
             # HACS should ship the bundle. Keeping the backend usable makes a
             # missing/corrupt frontend recoverable through entities/services.
             return

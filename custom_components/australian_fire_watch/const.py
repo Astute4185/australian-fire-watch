@@ -5,11 +5,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 DOMAIN = "australian_fire_watch"
 NAME = "Australian Fire Watch"
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 CONFIG_ENTRY_VERSION = 2
+
+# Construct this once during integration import. Creating a ZoneInfo instance for
+# the first time can read tzdata from disk and must not happen on HA's event loop.
+SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 
 PLATFORMS = ["sensor", "binary_sensor", "geo_location"]
 

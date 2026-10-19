@@ -30,9 +30,10 @@ creates native geo-location entities, and can send lifecycle-aware notifications
 
 The Home Assistant integration domain is `australian_fire_watch`.
 
-Version 1.4.0 adds simple dashboard display presets and Home Assistant's modern
-notification-entity picker. Existing cards and legacy `notify.*` actions remain
-fully supported. It also includes the SA CFS feed reliability work from 1.3.3.
+Version 1.4.1 keeps Home Assistant's event loop free of timezone and frontend
+filesystem loading while retaining the dashboard presets and modern notification
+entity support introduced in 1.4.0. Existing cards and legacy `notify.*` actions
+remain fully supported.
 
 > **Safety**
 >
