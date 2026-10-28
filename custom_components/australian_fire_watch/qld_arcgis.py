@@ -1,6 +1,6 @@
 """Read-only Queensland Fire Department ArcGIS enrichment provider.
 
-Independent health for FDR, local fire bans, and State of Fire Emergency.
+Independent health for FDR and local fire bans.
 A failed query never becomes an affirmative "No Fire Ban" observation.
 """
 
@@ -15,7 +15,6 @@ from aiohttp import ClientError, ClientSession
 
 from .qld_parsers import (
     QldDataError,
-    parse_emergency,
     parse_forecast,
     parse_local_fire_ban,
 )
@@ -23,7 +22,6 @@ from .qld_parsers import (
 ROOT = "https://services1.arcgis.com/vkTwD8kHw2woKBqV/arcgis/rest/services"
 FDR_URL = f"{ROOT}/BOM_Fire_Danger_Ratings_Public_View_/FeatureServer/0/query"
 BAN_URL = f"{ROOT}/LGAs_Firebans_Public_View/FeatureServer/0/query"
-EMERGENCY_URL = f"{ROOT}/StateOfEmergency_View/FeatureServer/0/query"
 QFD_DANGER_URL = "https://www.fire.qld.gov.au/prepare/bushfire/fire-danger-ratings"
 QFD_BAN_URL = "https://www.fire.qld.gov.au/safety-education/using-fire-outdoors/fire-bans-and-restrictions"
 MAX_BODY = 1_000_000
@@ -31,12 +29,10 @@ TIMEOUT = 20
 FIELDS = {
     "forecast": "Area_Name,Day1,Day2,Day3,Day4,Date1,Date2,Date3,Date4,FMETimeStamp",
     "local_fire_ban": "SHIRE_NAME,HASFIREBAN,DATE_FROM,DATE_TO,FMETimestamp,Link",
-    "state_of_emergency": "LGA_Name,LGA_code,InStateOfEmergency",
 }
 ENDPOINTS = {
     "forecast": FDR_URL,
     "local_fire_ban": BAN_URL,
-    "state_of_emergency": EMERGENCY_URL,
 }
 
 
@@ -45,7 +41,6 @@ def empty_qld() -> dict[str, Any]:
     return {
         "forecast": {"covered": None, "health": "unavailable", "forecast": []},
         "local_fire_ban": {"state": None, "health": "unavailable"},
-        "state_of_emergency": {"state": None, "health": "unavailable"},
         "health": "unavailable",
     }
 
@@ -117,9 +112,9 @@ class QldArcGISProvider:
     async def async_fetch(
         self, latitude: float, longitude: float, *, now: datetime | None = None
     ) -> dict[str, Any]:
-        """Fetch three layers separately; partial failure must be visible."""
+        """Fetch only the two QLD enrichment layers required by HA entities."""
         now = now or datetime.now(timezone.utc)
-        forecast, ban, emergency = await asyncio.gather(
+        forecast, ban = await asyncio.gather(
             self._one(
                 "forecast", latitude, longitude,
                 lambda response: parse_forecast(response, now=now), now=now,
@@ -128,20 +123,16 @@ class QldArcGISProvider:
                 "local_fire_ban", latitude, longitude,
                 parse_local_fire_ban, now=now,
             ),
-            self._one(
-                "state_of_emergency", latitude, longitude,
-                parse_emergency, now=now,
-            ),
         )
-        statuses = {forecast["health"], ban["health"], emergency["health"]}
+        statuses = {forecast["health"], ban["health"]}
         health = (
             "fresh" if statuses == {"fresh"}
+            else "stale" if statuses == {"stale"}
             else "unavailable" if statuses == {"unavailable"}
             else "degraded"
         )
         return {
             "forecast": forecast,
             "local_fire_ban": ban,
-            "state_of_emergency": emergency,
             "health": health,
         }

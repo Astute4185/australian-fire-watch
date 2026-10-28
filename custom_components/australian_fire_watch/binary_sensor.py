@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, jurisdiction_codes
+from .const import DOMAIN
 from .coordinator import FireWatchCoordinator
 from .sensor import FireWatchSensorBase
 
@@ -30,13 +30,6 @@ async def async_setup_entry(
         FireWatchFeedProblemBinarySensor(coordinator),
         FireWatchDeliveryProblemBinarySensor(coordinator),
     ]
-    if "QLD" in jurisdiction_codes(coordinator.config):
-        entities.extend(
-            [
-                FireWatchQldRestrictionBinarySensor(coordinator, "local_fire_ban"),
-                FireWatchQldRestrictionBinarySensor(coordinator, "state_of_emergency"),
-            ]
-        )
     async_add_entities(entities)
 
 
@@ -107,68 +100,46 @@ class FireWatchTotalFireBanBinarySensor(FireWatchBinarySensorBase):
 
     @property
     def available(self) -> bool:
+        today = self.coordinator.data.get("danger", {}).get("today", {})
+        # Queensland's legal ban feed is independent from the FDR feed. A valid
+        # ban remains available during an FDR outage, and an invalid ban can
+        # never be treated as False even with a valid danger rating.
+        if "total_fire_ban_available" in today:
+            return (
+                super().available
+                and today["total_fire_ban_available"] is True
+                and isinstance(self.is_on, bool)
+            )
+        # Keep existing NSW availability and unique ID unchanged.
         return (
             super().available
-            and self.coordinator.data.get("danger", {})
-            .get("today", {})
-            .get("available", False)
+            and today.get("available", False)
             and self.is_on is not None
         )
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         danger = self.coordinator.data.get("danger", {})
-        return {
+        today = danger.get("today", {})
+        attributes = {
             "district": danger.get("district"),
             "issued_at": danger.get("rfs_issued_at"),
         }
-
-
-class FireWatchQldRestrictionBinarySensor(FireWatchBinarySensorBase):
-    """Explicit QFD-reported restriction, unavailable on partial/failed data."""
-
-    _attr_icon = "mdi:fire-off"
-
-    def __init__(self, coordinator: FireWatchCoordinator, key: str) -> None:
-        super().__init__(coordinator, f"qld_{key}")
-        self._key = key
-        self._attr_name = (
-            "QLD Local Fire Ban" if key == "local_fire_ban"
-            else "QLD State of Fire Emergency"
-        )
-
-    @property
-    def _record(self) -> dict[str, Any]:
-        return (self.coordinator.data.get("qld") or {}).get(self._key) or {}
-
-    @property
-    def available(self) -> bool:
-        return (
-            super().available
-            and self._record.get("health") == "fresh"
-            and isinstance(self._record.get("state"), bool)
-        )
-
-    @property
-    def is_on(self) -> bool | None:
-        return self._record.get("state") if self.available else None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        return {
-            "lga": self._record.get("lga"),
-            "source_status": self._record.get("raw_status"),
-            "effective_from": self._record.get("effective_from"),
-            "effective_to": self._record.get("effective_to"),
-            "record_updated_at": self._record.get("record_updated_at"),
-            "checked_at": self._record.get("checked_at"),
-            "source_health": self._record.get("health"),
-            "source_url": (
-                "https://www.fire.qld.gov.au/safety-education/using-fire-outdoors/"
-                "fire-bans-and-restrictions"
-            ),
-            "disclaimer": "Check official QFD declarations before lighting any fire.",
-        }
+        if "total_fire_ban_available" in today:
+            attributes.update({
+                "restriction_type": "QLD Local Fire Ban",
+                "lga": today.get("fire_ban_lga"),
+                "source_status": today.get("fire_ban_source_status"),
+                "effective_from": today.get("fire_ban_effective_from"),
+                "effective_to": today.get("fire_ban_effective_to"),
+                "record_updated_at": today.get("fire_ban_record_updated_at"),
+                "source_health": today.get("fire_ban_health"),
+                "source_url": (
+                    "https://www.fire.qld.gov.au/safety-education/"
+                    "using-fire-outdoors/fire-bans-and-restrictions"
+                ),
+            })
+        return attributes
 
 
 class FireWatchFeedProblemBinarySensor(FireWatchBinarySensorBase):
