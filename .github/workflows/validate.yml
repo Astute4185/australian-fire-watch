@@ -1,11 +1,13 @@
 name: Validate
 
+# Validate changes before merge. A push/merge to main does not run this workflow.
+# GitGuardian remains independently configured and is not modified here.
 on:
-  push:
   pull_request:
-  schedule:
-    - cron: "17 3 * * 6"
-  workflow_dispatch:
+    branches:
+      - main
+  # Invoked only by the explicitly tagged release workflow, not by main pushes.
+  workflow_call:
 
 permissions:
   contents: read
@@ -78,15 +80,18 @@ jobs:
       - run: node --check custom_components/australian_fire_watch/frontend/australian-fire-watch-panel.js
       - run: node --test tests/frontend-recovery.test.cjs
 
-  live-feeds:
-    name: Official feed contract smoke test
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+  hacs-package:
+    name: Verify release ZIP structure
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
-      - name: Validate current publisher responses against every parser
-        run: python scripts/check_live_feeds.py
+      - name: Build and verify HACS ZIP from tracked integration files
+        run: |
+          python scripts/build_hacs_release.py \
+            --ref "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/australian_fire_watch.zip"
