@@ -105,7 +105,11 @@ from .parsers import (
 )
 from .regional_parsers import PARSER_NAMES, fire_incidents_only
 from .qld_arcgis import QldArcGISProvider, empty_qld
-from .qld_parsers import danger_from_forecast
+from .qld_parsers import (
+    danger_from_forecast,
+    danger_with_local_fire_ban,
+    merge_qld_feed_health,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -267,6 +271,13 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     None,
                 )
                 qld_coverage = self._qld["forecast"].get("covered")
+                qld_ban_coverage = (
+                    self._qld["local_fire_ban"].get("health") == "fresh"
+                )
+                qld_location = (
+                    "QLD" in selected_codes
+                    and (qld_coverage is True or qld_ban_coverage)
+                )
                 if "QLD" in selected_codes and qld_coverage is True:
                     # Geographic coverage wins even when the QLD forecast is stale:
                     # do not mislabel a Queensland zone with NSW ratings.
@@ -275,7 +286,9 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 elif (
                     nsw is not None
                     and nsw.danger is not None
-                    and ("QLD" not in selected_codes or qld_coverage is False)
+                    and ("QLD" not in selected_codes or (
+                        qld_coverage is False and not qld_ban_coverage
+                    ))
                 ):
                     # A valid zero-match QLD spatial query can fall back to NSW.
                     self._danger = nsw.danger
@@ -290,6 +303,17 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         "Missing or stale danger data is not evidence of safety."
                     )
                     self._warnings = []
+
+                if qld_location:
+                    self._danger = danger_with_local_fire_ban(
+                        self._danger, self._qld["local_fire_ban"]
+                    )
+                if "QLD" in selected_codes and not (
+                    qld_coverage is False
+                    and bool(selected_codes - {"QLD"})
+                    and not qld_ban_coverage
+                ):
+                    self._feed = merge_qld_feed_health(self._feed, self._qld)
 
                 events = await self._async_track_lifecycle(
                     current_monitored,

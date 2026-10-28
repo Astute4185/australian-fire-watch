@@ -60,11 +60,6 @@ def ban_payload(state="No Fire Ban"):
     }}]}
 
 
-def emergency_payload(state="No"):
-    return {"features": [{"attributes": {
-        "LGA_Name": "BRISBANE CITY", "LGA_code": "1000",
-        "InStateOfEmergency": state,
-    }}]}
 
 
 class TestQldParsers(unittest.TestCase):
@@ -117,10 +112,11 @@ class TestQldParsers(unittest.TestCase):
     def test_restriction_explicit_values(self):
         self.assertFalse(parsers.parse_local_fire_ban(ban_payload())["state"])
         self.assertTrue(parsers.parse_local_fire_ban(ban_payload("Fire Ban"))["state"])
-        self.assertFalse(parsers.parse_emergency(emergency_payload())["state"])
-        self.assertTrue(parsers.parse_emergency(emergency_payload("Yes"))["state"])
-        with self.assertRaises(parsers.QldDataError):
-            parsers.parse_emergency(emergency_payload("Maybe"))
+        self.assertRaises(
+            parsers.QldDataError,
+            parsers.parse_local_fire_ban,
+            ban_payload("Maybe"),
+        )
 
 
 class FakeContent:
@@ -158,25 +154,105 @@ class TestQldProvider(unittest.IsolatedAsyncioTestCase):
     async def test_independent_health_and_statuses(self):
         session = FakeSession({
             arcgis.FDR_URL: forecast_payload(),
-            arcgis.BAN_URL: ban_payload(),
-            arcgis.EMERGENCY_URL: {"error": {"code": 498, "message": "blocked"}},
+            arcgis.BAN_URL: {"error": {"code": 498, "message": "blocked"}},
         })
-        result = await arcgis.QldArcGISProvider(session).async_fetch(-27.4698, 153.0251, now=NOW)
+        result = await arcgis.QldArcGISProvider(session).async_fetch(
+            -27.4698, 153.0251, now=NOW
+        )
         self.assertEqual(result["health"], "degraded")
         self.assertTrue(result["forecast"]["covered"])
-        self.assertFalse(result["local_fire_ban"]["state"])
-        self.assertIsNone(result["state_of_emergency"]["state"])
-        self.assertEqual(result["state_of_emergency"]["health"], "unavailable")
+        self.assertIsNone(result["local_fire_ban"]["state"])
+        self.assertEqual(result["local_fire_ban"]["health"], "unavailable")
+        self.assertNotIn("state_of_emergency", result)
 
-    async def test_failed_fdr_coverage_remains_unknown(self):
+    async def test_failed_fdr_does_not_block_valid_fire_ban(self):
         session = FakeSession({
             arcgis.FDR_URL: {"error": {"code": 400}},
-            arcgis.BAN_URL: ban_payload(),
-            arcgis.EMERGENCY_URL: emergency_payload(),
+            arcgis.BAN_URL: ban_payload("Fire Ban"),
         })
-        result = await arcgis.QldArcGISProvider(session).async_fetch(-27.4698, 153.0251, now=NOW)
+        result = await arcgis.QldArcGISProvider(session).async_fetch(
+            -27.4698, 153.0251, now=NOW
+        )
         self.assertIsNone(result["forecast"]["covered"])
         self.assertEqual(result["health"], "degraded")
+        self.assertTrue(result["local_fire_ban"]["state"])
+
+
+class TestQldCompatibility(unittest.TestCase):
+    def test_qld_ban_reuses_today_value_even_without_fdr(self):
+        danger = parsers.danger_from_forecast(
+            {"district": "Southeast Coast", "forecast": [], "health": "unavailable"}
+        )
+        result = parsers.danger_with_local_fire_ban(
+            danger,
+            {"health": "fresh", **parsers.parse_local_fire_ban(ban_payload("Fire Ban"))},
+        )
+        self.assertIs(result["today"]["total_fire_ban"], True)
+        self.assertTrue(result["today"]["total_fire_ban_available"])
+        self.assertFalse(result["today"]["available"])
+        self.assertEqual(result["today"]["fire_ban_lga"], "Brisbane City")
+        self.assertIsNone(danger["today"]["total_fire_ban"])
+
+    def test_unavailable_qld_ban_never_claims_no_ban(self):
+        danger = parsers.danger_from_forecast(
+            parsers.parse_forecast(forecast_payload(), now=NOW)
+        )
+        result = parsers.danger_with_local_fire_ban(
+            danger, {"health": "unavailable", "error": "request failed"}
+        )
+        self.assertIsNone(result["today"]["total_fire_ban"])
+        self.assertFalse(result["today"]["total_fire_ban_available"])
+        self.assertTrue(result["today"]["available"])
+
+    def test_qld_feed_failure_uses_existing_feed_health_and_problem(self):
+        feed = {
+            "status": "fresh", "assessment_complete": True,
+            "current_incident_feeds": ["qld_incidents"],
+            "sources": {"qld_incidents": {"status": "fresh"}},
+            "message": None,
+        }
+        qld = {
+            "health": "degraded",
+            "forecast": {"health": "fresh", "checked_at": NOW.isoformat()},
+            "local_fire_ban": {"health": "unavailable", "error": "request failed"},
+        }
+        merged = parsers.merge_qld_feed_health(feed, qld)
+        self.assertEqual(merged["status"], "degraded")
+        self.assertTrue(merged["assessment_complete"])
+        self.assertEqual(merged["current_incident_feeds"], ["qld_incidents"])
+        self.assertEqual(merged["sources"]["qld_local_fire_ban"]["status"], "unavailable")
+        self.assertIn("local_fire_ban", merged["message"])
+        self.assertEqual(feed["status"], "fresh")
+
+    def test_healthy_qld_does_not_change_existing_feed_health(self):
+        feed = {"status": "fresh", "assessment_complete": True, "sources": {}}
+        qld = {
+            "health": "fresh",
+            "forecast": {"health": "fresh"},
+            "local_fire_ban": {"health": "fresh"},
+        }
+        merged = parsers.merge_qld_feed_health(feed, qld)
+        self.assertEqual(merged["status"], "fresh")
+        self.assertEqual(len(merged["sources"]), 2)
+
+    def test_missing_qld_does_not_hide_incident_outage(self):
+        feed = {"status": "unavailable", "assessment_complete": False}
+        merged = parsers.merge_qld_feed_health(feed, arcgis.empty_qld())
+        self.assertEqual(merged["status"], "unavailable")
+
+    def test_removed_entities_are_not_registered(self):
+        import ast
+        root = PACKAGE_DIR
+        sensors = ast.parse((root / "sensor.py").read_text())
+        binaries = ast.parse((root / "binary_sensor.py").read_text())
+        joined = (root / "sensor.py").read_text() + (root / "binary_sensor.py").read_text()
+        self.assertNotIn("FireWatchQldHealthSensor", joined)
+        self.assertNotIn("FireWatchQldRestrictionBinarySensor", joined)
+        self.assertNotIn("qld_fire_danger_day_3", joined)
+        self.assertNotIn("qld_fire_danger_day_4", joined)
+        self.assertIn("qld_fire_danger_day_2", joined)
+        self.assertTrue(sensors.body)
+        self.assertTrue(binaries.body)
 
 
 if __name__ == "__main__":

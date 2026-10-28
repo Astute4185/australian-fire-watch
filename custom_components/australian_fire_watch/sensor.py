@@ -42,14 +42,7 @@ async def async_setup_entry(
         FireWatchFeedHealthSensor(coordinator),
     ]
     if "QLD" in jurisdiction_codes(coordinator.config):
-        entities.extend(
-            [
-                FireWatchQldForecastSensor(coordinator, 1),
-                FireWatchQldForecastSensor(coordinator, 2),
-                FireWatchQldForecastSensor(coordinator, 3),
-                FireWatchQldHealthSensor(coordinator),
-            ]
-        )
+        entities.append(FireWatchQldTomorrowDangerSensor(coordinator))
     async_add_entities(entities)
 
 
@@ -127,29 +120,24 @@ class FireWatchDangerSensor(FireWatchSensorBase):
         return dict(self.coordinator.data.get("danger", {}))
 
 
-class FireWatchQldForecastSensor(FireWatchSensorBase):
-    """Dated Queensland forecast; today's sensor already exists."""
+class FireWatchQldTomorrowDangerSensor(FireWatchSensorBase):
+    """QLD tomorrow forecast, using the previously registered entity unique ID."""
 
+    _attr_name = "Fire danger tomorrow"
     _attr_icon = "mdi:fire-circle"
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = DANGER_OPTIONS
 
-    def __init__(self, coordinator: FireWatchCoordinator, offset: int) -> None:
-        super().__init__(coordinator, f"qld_fire_danger_day_{offset + 1}")
-        self._offset = offset
-        self._attr_name = (
-            "Fire danger tomorrow" if offset == 1
-            else f"Fire danger in {offset} days"
-        )
+    def __init__(self, coordinator: FireWatchCoordinator) -> None:
+        # Retain the unique ID of the previous Queensland day-2 entity.
+        super().__init__(coordinator, "qld_fire_danger_day_2")
 
     @property
     def _day(self) -> dict[str, Any]:
         danger = self.coordinator.data.get("danger", {})
-        # Only show QLD forecast data, never a NSW fallback for this entity.
-        if danger.get("today", {}).get("rating_source") != "QFD/BOM ArcGIS FDR":
+        if danger.get("tomorrow", {}).get("rating_source") != "QFD/BOM ArcGIS FDR":
             return {}
-        days = danger.get("forecast", [])
-        return days[self._offset] if len(days) > self._offset else {}
+        return danger.get("tomorrow", {})
 
     @property
     def available(self) -> bool:
@@ -168,35 +156,6 @@ class FireWatchQldForecastSensor(FireWatchSensorBase):
                 self.coordinator.data.get("qld") or {}
             ).get("forecast", {}).get("source_updated_at"),
             "source_url": "https://www.fire.qld.gov.au/prepare/bushfire/fire-danger-ratings",
-        }
-
-
-class FireWatchQldHealthSensor(FireWatchSensorBase):
-    """Expose independent QLD source health, not incident feed health."""
-
-    _attr_name = "QLD enrichment health"
-    _attr_icon = "mdi:cloud-sync"
-    _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = FEED_OPTIONS
-
-    def __init__(self, coordinator: FireWatchCoordinator) -> None:
-        super().__init__(coordinator, "qld_enrichment_health")
-
-    @property
-    def native_value(self) -> str:
-        return str((self.coordinator.data.get("qld") or {}).get("health", "unavailable"))
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        qld = self.coordinator.data.get("qld") or {}
-        return {
-            name: {
-                "health": (qld.get(name) or {}).get("health", "unavailable"),
-                "checked_at": (qld.get(name) or {}).get("checked_at"),
-                "error": (qld.get(name) or {}).get("error"),
-                "source_updated_at": (qld.get(name) or {}).get("source_updated_at"),
-            }
-            for name in ("forecast", "local_fire_ban", "state_of_emergency")
         }
 
 

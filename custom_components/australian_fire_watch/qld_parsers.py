@@ -131,24 +131,6 @@ def parse_local_fire_ban(payload: Any) -> dict[str, Any]:
     }
 
 
-def parse_emergency(payload: Any) -> dict[str, Any]:
-    """Parse reported emergency status. Positive 'Yes' needs field validation."""
-    row = _one_feature(payload)
-    if row is None:
-        raise QldDataError("No emergency polygon matched location")
-    lga, raw = row.get("LGA_Name"), row.get("InStateOfEmergency")
-    if not isinstance(lga, str) or not lga.strip():
-        raise QldDataError("Emergency LGA name missing")
-    if raw not in ("Yes", "No"):
-        raise QldDataError("Unexpected State of Emergency status")
-    return {
-        "state": raw == "Yes",
-        "raw_status": raw,
-        "lga": lga.strip(),
-        "lga_code": row.get("LGA_code"),
-    }
-
-
 def danger_from_forecast(forecast: dict[str, Any]) -> dict[str, Any]:
     """Build the existing coordinator danger contract without NSW ban semantics."""
     days = list(forecast.get("forecast") or [])
@@ -183,3 +165,88 @@ def danger_from_forecast(forecast: dict[str, Any]) -> dict[str, Any]:
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+def danger_with_local_fire_ban(
+    danger: dict[str, Any], ban: dict[str, Any]
+) -> dict[str, Any]:
+    """Reuse today's legacy Total Fire Ban field with QLD's legal declaration.
+
+    Restriction availability is deliberately independent of FDR availability.
+    This must only be called when the configured position is in Queensland.
+    """
+    today = dict(danger.get("today") or {})
+    valid = ban.get("health") == "fresh" and isinstance(ban.get("state"), bool)
+    today.update({
+        "total_fire_ban": ban["state"] if valid else None,
+        "total_fire_ban_available": valid,
+        "fire_ban_health": ban.get("health", "unavailable"),
+        "fire_ban_lga": ban.get("lga"),
+        "fire_ban_source_status": ban.get("raw_status"),
+        "fire_ban_effective_from": ban.get("effective_from"),
+        "fire_ban_effective_to": ban.get("effective_to"),
+        "fire_ban_record_updated_at": ban.get("record_updated_at"),
+    })
+    return {**danger, "today": today}
+
+
+def merge_qld_feed_health(
+    feed: dict[str, Any], qld: dict[str, Any]
+) -> dict[str, Any]:
+    """Incorporate QLD enrichment into existing Feed health / Feed problem.
+
+    Keep incident completeness independent, so an FDR outage cannot clear an
+    existing incident warning or manufacture an all-clear.
+    """
+    result = dict(feed)
+    sources = dict(feed.get("sources") or {})
+    details: dict[str, dict[str, Any]] = {}
+    for name, key, url in (
+        (
+            "QLD fire danger",
+            "forecast",
+            "https://www.fire.qld.gov.au/prepare/bushfire/fire-danger-ratings",
+        ),
+        (
+            "QLD local fire ban",
+            "local_fire_ban",
+            "https://www.fire.qld.gov.au/safety-education/using-fire-outdoors/"
+            "fire-bans-and-restrictions",
+        ),
+    ):
+        record = dict(qld.get(key) or {})
+        status = str(record.get("health", "unavailable"))
+        detail = {
+            "status": status,
+            "jurisdiction": "QLD",
+            "url": url,
+            "last_successful_fetch": (
+                record.get("checked_at") if status == "fresh" else None
+            ),
+            "last_checked": record.get("checked_at"),
+            "last_changed": record.get("source_updated_at")
+            or record.get("record_updated_at"),
+            "error": record.get("error"),
+        }
+        sources[f"qld_{key}"] = detail
+        details[key] = detail
+    result["sources"] = sources
+    cross_check = dict(feed.get("cross_check") or {})
+    cross_check["qld_enrichment_count"] = len(details)
+    cross_check["qld_enrichment_available_count"] = sum(
+        detail["status"] == "fresh" for detail in details.values()
+    )
+    result["cross_check"] = cross_check
+    result["qld_enrichment"] = {
+        "status": qld.get("health", "unavailable"),
+        "sources": details,
+    }
+    qld_failed = [name for name, detail in details.items() if detail["status"] != "fresh"]
+    if qld_failed:
+        if result.get("status") == "fresh":
+            result["status"] = "degraded"
+        message = "QLD enrichment delayed or unavailable: " + ", ".join(qld_failed)
+        result["message"] = "; ".join(
+            part for part in (result.get("message"), message) if part
+        )
+    return result
