@@ -104,6 +104,8 @@ from .parsers import (
     parse_rfs_fire_danger,
 )
 from .regional_parsers import PARSER_NAMES, fire_incidents_only
+from .qld_arcgis import QldArcGISProvider, empty_qld
+from .qld_parsers import danger_from_forecast
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -147,7 +149,9 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             always_update=False,
         )
         self.entry = entry
-        self.api = OfficialFeedClient(aiohttp_client.async_get_clientsession(hass))
+        session = aiohttp_client.async_get_clientsession(hass)
+        self.api = OfficialFeedClient(session)
+        self.qld_provider = QldArcGISProvider(session)
         self._store = Store[dict[str, Any]](
             hass, 1, f"{DOMAIN}.{entry.entry_id}.lifecycle"
         )
@@ -164,6 +168,7 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._incidents: tuple[Incident, ...] = ()
         self._planned: tuple[Incident, ...] = ()
         self._danger: dict[str, Any] = _unknown_danger()
+        self._qld: dict[str, Any] = empty_qld()
         self._warnings: list[dict[str, Any]] = []
         self._feed: dict[str, Any] = _empty_feed()
         self._parse_errors: dict[str, str] = {}
@@ -249,21 +254,40 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 self._set_display_incidents(monitored)
                 self._feed = self._compose_combined_feed(results)
-
+                selected_codes = {result.profile.code for result in results}
+                if "QLD" in selected_codes:
+                    latitude, longitude = self._home_coordinates()
+                    self._qld = await self.qld_provider.async_fetch(
+                        latitude, longitude
+                    )
+                else:
+                    self._qld = empty_qld()
                 nsw = next(
                     (result for result in results if result.profile.code == "NSW"),
                     None,
                 )
-                if nsw is not None and nsw.danger is not None:
+                qld_coverage = self._qld["forecast"].get("covered")
+                if "QLD" in selected_codes and qld_coverage is True:
+                    # Geographic coverage wins even when the QLD forecast is stale:
+                    # do not mislabel a Queensland zone with NSW ratings.
+                    self._danger = danger_from_forecast(self._qld["forecast"])
+                    self._warnings = []
+                elif (
+                    nsw is not None
+                    and nsw.danger is not None
+                    and ("QLD" not in selected_codes or qld_coverage is False)
+                ):
+                    # A valid zero-match QLD spatial query can fall back to NSW.
                     self._danger = nsw.danger
                     self._warnings = list(nsw.warnings)
                 else:
+                    # Failed QLD coverage checks are NOT an NSW location proof.
                     self._danger = _unknown_danger()
                     self._danger["district"] = (
-                        "Not available for selected jurisdictions"
+                        "Location not resolved to an available danger district"
                     )
                     self._danger["source_note"] = (
-                        "Use the official state or territory fire-danger source."
+                        "Missing or stale danger data is not evidence of safety."
                     )
                     self._warnings = []
 
@@ -275,7 +299,7 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 danger_events = (
                     await self._async_track_danger_lifecycle(nsw.danger_current)
-                    if nsw is not None
+                    if nsw is not None and self._danger is nsw.danger
                     else []
                 )
                 self.last_events = tuple(events)
@@ -807,6 +831,7 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "recommended_action": recommended,
             "official_warning_level": warning_level,
             "danger": self._danger,
+            "qld": self._qld if "QLD" in {p.code for p in profiles} else None,
             "incidents": incident_dicts,
             "planned_burns": planned_dicts,
             "camera_network": {
