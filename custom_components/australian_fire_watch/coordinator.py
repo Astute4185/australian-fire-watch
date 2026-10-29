@@ -260,10 +260,21 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._feed = self._compose_combined_feed(results)
                 selected_codes = {result.profile.code for result in results}
                 if "QLD" in selected_codes:
-                    latitude, longitude = self._home_coordinates()
-                    self._qld = await self.qld_provider.async_fetch(
-                        latitude, longitude
-                    )
+                    try:
+                        latitude, longitude = self._home_coordinates()
+                        self._qld = await self.qld_provider.async_fetch(
+                            latitude, longitude
+                        )
+                    except Exception:
+                        # QLD danger/ban enrichment is independent of the
+                        # official incident feeds. Unexpected provider errors
+                        # must not discard otherwise valid incident updates.
+                        # Cancellation still propagates (CancelledError is a
+                        # BaseException) so HA can stop an interrupted update.
+                        _LOGGER.exception("Unexpected QLD ArcGIS enrichment failure")
+                        self._qld = empty_qld()
+                        for source_name in ("forecast", "local_fire_ban"):
+                            self._qld[source_name]["error"] = "provider_exception"
                 else:
                     self._qld = empty_qld()
                 nsw = next(
