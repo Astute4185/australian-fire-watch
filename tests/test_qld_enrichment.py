@@ -119,6 +119,158 @@ class TestQldParsers(unittest.TestCase):
         )
 
 
+class TestQldForecastRollover(unittest.TestCase):
+    """QFD can move Date1 to tomorrow while today's calendar date persists."""
+
+    def setUp(self):
+        self.local_day = datetime(2026, 10, 29, 8, 0, tzinfo=parsers.AEST)
+        self.afternoon = datetime(2026, 10, 29, 20, 5, tzinfo=parsers.AEST)
+
+    def _forecast(self, start_day, now):
+        row = {
+            "Area_Name": "Southeast Coast",
+            "FMETimeStamp": ms(now - timedelta(minutes=5)),
+        }
+        for n, rating in enumerate(("Moderate", "High", "No Rating", "Extreme"), 1):
+            row[f"Day{n}"] = rating
+            row[f"Date{n}"] = ms(start_day + timedelta(days=n - 1))
+        return parsers.parse_forecast(
+            {"features": [{"attributes": row}]}, now=now
+        )
+
+    def test_today_retained_after_upstream_rollover(self):
+        morning = self._forecast(self.local_day.replace(hour=0), self.local_day)
+        _, saved = parsers.retain_qld_today_rating(
+            morning, None, now=self.local_day
+        )
+        self.assertEqual(saved["rating"], "Moderate")
+
+        tomorrow = self.local_day.replace(hour=0) + timedelta(days=1)
+        advanced = self._forecast(tomorrow, self.afternoon)
+        self.assertFalse(advanced["forecast"][0]["available"])
+        retained, cache = parsers.retain_qld_today_rating(
+            advanced, saved, now=self.afternoon
+        )
+        today = parsers.danger_from_forecast(retained)["today"]
+        self.assertTrue(today["available"])
+        self.assertTrue(today["retained"])
+        self.assertEqual(today["date"], "2026-10-29")
+        self.assertEqual(today["rating"], "Moderate")
+        self.assertEqual(today["issued_at"], saved["source_updated_at"])
+        self.assertEqual(retained["forecast"][1]["rating"], "Moderate")
+        self.assertEqual(retained["health"], "fresh")
+        self.assertEqual(cache, saved)
+
+    def test_restarted_cache_round_trips_through_json(self):
+        morning = self._forecast(self.local_day.replace(hour=0), self.local_day)
+        _, saved = parsers.retain_qld_today_rating(morning, None, now=self.local_day)
+        saved = json.loads(json.dumps(saved))  # HA Store format
+        advanced = self._forecast(
+            self.local_day.replace(hour=0) + timedelta(days=1), self.afternoon
+        )
+        result, _ = parsers.retain_qld_today_rating(
+            advanced, saved, now=self.afternoon
+        )
+        self.assertEqual(result["forecast"][0]["rating"], "Moderate")
+        self.assertTrue(result["forecast"][0]["retained"])
+
+    def test_no_prior_today_rating_does_not_fabricate_one(self):
+        advanced = self._forecast(
+            self.local_day.replace(hour=0) + timedelta(days=1), self.afternoon
+        )
+        result, cache = parsers.retain_qld_today_rating(
+            advanced, None, now=self.afternoon
+        )
+        self.assertFalse(result["forecast"][0]["available"])
+        self.assertIsNone(cache)
+
+    def test_midnight_expires_previous_day_cache(self):
+        morning = self._forecast(self.local_day.replace(hour=0), self.local_day)
+        _, saved = parsers.retain_qld_today_rating(morning, None, now=self.local_day)
+        midnight = datetime(2026, 10, 30, 0, 1, tzinfo=parsers.AEST)
+        no_coverage = {"covered": None, "health": "unavailable"}
+        _, cache = parsers.retain_qld_today_rating(
+            no_coverage, saved, now=midnight
+        )
+        self.assertIsNone(cache)
+
+    def test_provider_failure_never_uses_cached_rating(self):
+        morning = self._forecast(self.local_day.replace(hour=0), self.local_day)
+        _, saved = parsers.retain_qld_today_rating(morning, None, now=self.local_day)
+        outage = {"covered": None, "health": "unavailable", "forecast": []}
+        result, cache = parsers.retain_qld_today_rating(
+            outage, saved, now=self.afternoon
+        )
+        self.assertEqual(result, outage)
+        self.assertEqual(cache, saved)
+
+    def test_district_mismatch_never_reuses_cached_rating(self):
+        morning = self._forecast(self.local_day.replace(hour=0), self.local_day)
+        _, saved = parsers.retain_qld_today_rating(morning, None, now=self.local_day)
+        advanced = self._forecast(
+            self.local_day.replace(hour=0) + timedelta(days=1), self.afternoon
+        )
+        advanced["district"] = "Central Highlands"
+        result, cache = parsers.retain_qld_today_rating(
+            advanced, saved, now=self.afternoon
+        )
+        self.assertFalse(result["forecast"][0]["available"])
+        self.assertIsNone(cache)
+
+    def test_live_today_rating_replaces_cached_rating(self):
+        original = self._forecast(self.local_day.replace(hour=0), self.local_day)
+        _, cached = parsers.retain_qld_today_rating(
+            original, None, now=self.local_day
+        )
+        later = self.local_day + timedelta(hours=2)
+        revised = self._forecast(self.local_day.replace(hour=0), later)
+        revised["forecast"][0]["rating"] = "High"
+        result, updated = parsers.retain_qld_today_rating(
+            revised, cached, now=later
+        )
+        self.assertEqual(updated["rating"], "High")
+        self.assertFalse(result["forecast"][0].get("retained", False))
+
+    def test_stale_feed_does_not_reuse_cached_rating(self):
+        morning = self._forecast(self.local_day.replace(hour=0), self.local_day)
+        _, cached = parsers.retain_qld_today_rating(
+            morning, None, now=self.local_day
+        )
+        advanced = self._forecast(
+            self.local_day.replace(hour=0) + timedelta(days=1), self.afternoon
+        )
+        advanced["health"] = "stale"
+        result, _ = parsers.retain_qld_today_rating(
+            advanced, cached, now=self.afternoon
+        )
+        self.assertFalse(result["forecast"][0]["available"])
+
+    def test_next_day_live_forecast_replaces_prior_day_cache(self):
+        morning = self._forecast(self.local_day.replace(hour=0), self.local_day)
+        _, cached = parsers.retain_qld_today_rating(
+            morning, None, now=self.local_day
+        )
+        new_day = datetime(2026, 10, 30, 0, 1, tzinfo=parsers.AEST)
+        advanced = self._forecast(self.local_day.replace(hour=0) + timedelta(days=1), new_day)
+        result, replacement = parsers.retain_qld_today_rating(
+            advanced, cached, now=new_day
+        )
+        self.assertEqual(replacement["date"], "2026-10-30")
+        self.assertTrue(result["forecast"][0]["available"])
+        self.assertFalse(result["forecast"][0].get("retained", False))
+
+    def test_upstream_no_rating_remains_valid(self):
+        today_forecast = self._forecast(
+            self.local_day.replace(hour=0), self.local_day
+        )
+        today_forecast["forecast"][0]["rating"] = "No Rating"
+        result, saved = parsers.retain_qld_today_rating(
+            today_forecast, None, now=self.local_day
+        )
+        self.assertEqual(saved["rating"], "No Rating")
+        self.assertFalse(result["forecast"][0].get("retained", False))
+
+
 class FakeContent:
     def __init__(self, payload):
         self.payload = json.dumps(payload).encode()

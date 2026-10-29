@@ -109,6 +109,7 @@ from .qld_parsers import (
     danger_from_forecast,
     danger_with_local_fire_ban,
     merge_qld_feed_health,
+    retain_qld_today_rating,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -173,6 +174,7 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._planned: tuple[Incident, ...] = ()
         self._danger: dict[str, Any] = _unknown_danger()
         self._qld: dict[str, Any] = empty_qld()
+        self._qld_daily_rating_cache: dict[str, str] | None = None
         self._warnings: list[dict[str, Any]] = []
         self._feed: dict[str, Any] = _empty_feed()
         self._parse_errors: dict[str, str] = {}
@@ -229,6 +231,10 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._danger_baseline_complete = bool(
             saved.get("danger_baseline_complete", False)
         )
+        cached = saved.get("qld_daily_rating_cache")
+        self._qld_daily_rating_cache = (
+            dict(cached) if isinstance(cached, Mapping) else None
+        )
 
     async def _async_update_data(self) -> dict[str, Any]:
         async with self._transaction_lock:
@@ -260,12 +266,34 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._feed = self._compose_combined_feed(results)
                 selected_codes = {result.profile.code for result in results}
                 if "QLD" in selected_codes:
-                    latitude, longitude = self._home_coordinates()
-                    self._qld = await self.qld_provider.async_fetch(
-                        latitude, longitude
+                    try:
+                        latitude, longitude = self._home_coordinates()
+                        self._qld = await self.qld_provider.async_fetch(
+                            latitude, longitude
+                        )
+                    except Exception:
+                        # QLD danger/ban enrichment is independent of the
+                        # official incident feeds. Unexpected provider errors
+                        # must not discard otherwise valid incident updates.
+                        # Cancellation still propagates (CancelledError is a
+                        # BaseException) so HA can stop an interrupted update.
+                        _LOGGER.exception("Unexpected QLD ArcGIS enrichment failure")
+                        self._qld = empty_qld()
+                        for source_name in ("forecast", "local_fire_ban"):
+                            self._qld[source_name]["error"] = "provider_exception"
+                    # Retain a same-day rating even after QFD advances Day1
+                    # to tomorrow. Never mask source failures with cache data.
+                    (
+                        self._qld["forecast"],
+                        self._qld_daily_rating_cache,
+                    ) = retain_qld_today_rating(
+                        self._qld["forecast"],
+                        self._qld_daily_rating_cache,
+                        now=dt_util.utcnow(),
                     )
                 else:
                     self._qld = empty_qld()
+                    self._qld_daily_rating_cache = None
                 nsw = next(
                     (result for result in results if result.profile.code == "NSW"),
                     None,
@@ -1096,6 +1124,7 @@ class FireWatchCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "danger_baseline_complete": self._danger_baseline_complete,
                 "records": self._records,
                 "danger_records": self._danger_records,
+                "qld_daily_rating_cache": self._qld_daily_rating_cache,
                 "acknowledged": self._acknowledged,
                 "snoozed": self._snoozed,
                 "notification_outbox": self._outbox.export(),

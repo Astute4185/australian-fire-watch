@@ -129,7 +129,7 @@ class FireWatchQldTomorrowDangerSensor(FireWatchSensorBase):
     _attr_options = DANGER_OPTIONS
 
     def __init__(self, coordinator: FireWatchCoordinator) -> None:
-        # Retain the unique ID of the previous Queensland day-2 entity.
+        # Preserve the unique ID used by earlier development builds.
         super().__init__(coordinator, "qld_fire_danger_day_2")
 
     @property

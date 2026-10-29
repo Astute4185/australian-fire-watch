@@ -131,6 +131,85 @@ def parse_local_fire_ban(payload: Any) -> dict[str, Any]:
     }
 
 
+
+def retain_qld_today_rating(
+    forecast: dict[str, Any],
+    cached: dict[str, str] | None,
+    *,
+    now: datetime,
+    max_age: timedelta = timedelta(hours=36),
+) -> tuple[dict[str, Any], dict[str, str] | None]:
+    """Retain a correctly dated QLD *today* rating across forecast rollover.
+
+    QFD can advance Date1 to tomorrow in the afternoon. Only a rating
+    previously observed for the current AEST date and the same fire weather
+    district may fill the missing current-day slot. A provider error or stale
+    forecast must never be disguised by the cached value.
+
+    The returned cache is small and JSON-serializable for HA Store persistence.
+    """
+    today = now.astimezone(AEST).date().isoformat()
+    if cached is not None and (
+        not isinstance(cached, dict) or cached.get("date") != today
+    ):
+        cached = None
+
+    if forecast.get("covered") is False:
+        # The location has moved out of Queensland coverage.
+        return forecast, None
+    if forecast.get("covered") is not True or forecast.get("health") != "fresh":
+        return forecast, cached
+
+    district = forecast.get("district")
+    days = forecast.get("forecast")
+    if not isinstance(district, str) or not isinstance(days, list) or not days:
+        return forecast, None
+    current = days[0]
+    if not isinstance(current, dict) or current.get("date") != today:
+        return forecast, None
+
+    if current.get("available") is True and current.get("rating") in VALID_RATINGS:
+        # A live rating always supersedes a previously retained rating.
+        source_updated_at = forecast.get("source_updated_at")
+        if isinstance(source_updated_at, str):
+            cached = {
+                "date": today,
+                "rating": current["rating"],
+                "district": district,
+                "source_updated_at": source_updated_at,
+            }
+        return forecast, cached
+
+    if not cached or cached.get("district") != district:
+        return forecast, None
+    if cached.get("rating") not in VALID_RATINGS:
+        return forecast, None
+    published = cached.get("source_updated_at")
+    try:
+        issued = datetime.fromisoformat(published) if isinstance(published, str) else None
+    except ValueError:
+        issued = None
+    if issued is None or issued.tzinfo is None:
+        return forecast, None
+    age = now.astimezone(UTC) - issued.astimezone(UTC)
+    if age < -timedelta(hours=2) or age > max_age:
+        return forecast, None
+
+    # Clone the structure; don't mutate provider data in-place. Tomorrow and
+    # later forecast values remain sourced from the current live response.
+    restored = dict(forecast)
+    restored_days = [dict(day) for day in days]
+    restored_days[0] = {
+        "date": today,
+        "rating": cached["rating"],
+        "available": True,
+        "retained": True,
+        "source_updated_at": published,
+    }
+    restored["forecast"] = restored_days
+    return restored, cached
+
+
 def danger_from_forecast(forecast: dict[str, Any]) -> dict[str, Any]:
     """Build the existing coordinator danger contract without NSW ban semantics."""
     days = list(forecast.get("forecast") or [])
@@ -143,10 +222,10 @@ def danger_from_forecast(forecast: dict[str, Any]) -> dict[str, Any]:
             "available": bool(info.get("available")),
             "fbi": None,
             "total_fire_ban": None,
-            "issued_at": forecast.get("source_updated_at"),
+            "issued_at": info.get("source_updated_at", forecast.get("source_updated_at")),
             "rating_source": "QFD/BOM ArcGIS FDR",
             "fbi_source": None,
-            "retained": not bool(info.get("available")),
+            "retained": bool(info.get("retained", False)),
         }
 
     return {
